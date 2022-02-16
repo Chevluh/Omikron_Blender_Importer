@@ -58,9 +58,25 @@ def readUBytes(file_object, count):
         xs.append(readUByte(file_object))
     return xs
 
+def readString(file_object, length = 20):
+    return readUBytes(file_object, length).decode("cp858").rstrip('\x00')
+
+def readVector3(file_object):
+    x = readFloat(file_object)
+    z = -readFloat(file_object)
+    y = readFloat(file_object)
+    return Vector([x,y,z])
+
+def readColor32(file_object):
+    B= readUByte(file_object)/255
+    G= readUByte(file_object)/255
+    R= readUByte(file_object)/255
+    A= readUByte(file_object)/255
+    return [R,G,B,A]
+
 ###
 
-scalefactor = 0.025 #0.1/4
+scalefactor = 0.025 #1/40
 
 #mesh flags
 doNotDisplay_jointOnly = 1
@@ -89,7 +105,7 @@ WaterUnknown= 1 << 30
 def readHeader(file_object):
     header = dict()
 
-    header["signature"] = readUBytes(file_object, 4).decode("cp858")
+    header["signature"] = readString(file_object, 4)
     header["versionMajor"] = readUInt32(file_object)
     header["versionMinor"] = readUInt32(file_object)
     header["materialsOffset"] = readUInt32(file_object)
@@ -122,9 +138,9 @@ def readHeader(file_object):
 
 def readMaterial(file_object):
     material = dict()
-    material["name"] = readUBytes(file_object, 20).decode("cp858").rstrip('\x00')
-    material["BMPfile"] = readUBytes(file_object, 20).decode("cp858").rstrip('\x00')
-    material["TGAfile"] = readUBytes(file_object, 20).decode("cp858").rstrip('\x00')
+    material["name"] = readString(file_object)
+    material["BMPfile"] = readString(file_object)
+    material["TGAfile"] = readString(file_object)
     material["dataSize"] = readUInt32(file_object)
     material["reserved"] = readUInt64(file_object)
     material["BPP"] = readUInt32(file_object)
@@ -139,10 +155,8 @@ def readMeshDescriptor(file_object):
     meshDescriptor["moverFlags"] = readUInt32(file_object)
     meshDescriptor["meshID"] = readUInt32(file_object)
     meshDescriptor["scriptID"] = readUInt32(file_object)
-    meshDescriptor["name"] = readUBytes(file_object, 20).decode("cp858").rstrip('\x00') 
-    meshDescriptor["positionX"] = readFloat(file_object)
-    meshDescriptor["positionY"] = readFloat(file_object)
-    meshDescriptor["positionZ"] = readFloat(file_object)
+    meshDescriptor["name"] = readString(file_object)
+    meshDescriptor["position"] = readVector3(file_object) * scalefactor
     meshDescriptor["parentID"] = readInt32(file_object)
     meshDescriptor["firstChildID"] = readInt32(file_object)
     meshDescriptor["nextSiblingID"] = readInt32(file_object)
@@ -154,25 +168,19 @@ def readMeshDescriptor(file_object):
     meshDescriptor["unknown09"] = readFloat(file_object)
     meshDescriptor["unknown10"] = readFloat(file_object)
     meshDescriptor["unknown11"] = readFloat(file_object)
-    meshDescriptor["boxExtentNegX"] = readFloat(file_object)
-    meshDescriptor["boxExtentNegY"] = readFloat(file_object)
-    meshDescriptor["boxExtentNegZ"] = readFloat(file_object)
-    meshDescriptor["boxExtentPosX"] = readFloat(file_object)
-    meshDescriptor["boxExtentPosY"] = readFloat(file_object)
-    meshDescriptor["boxExtentposZ"] = readFloat(file_object)
+    meshDescriptor["boxExtentNeg"] = readVector3(file_object) * scalefactor
+    meshDescriptor["boxExtentPos"] = readVector3(file_object) * scalefactor
     meshDescriptor["unknown18"] = readFloat(file_object)
     meshDescriptor["unknown19"] = readFloat(file_object)
     meshDescriptor["unknown20"] = readFloat(file_object)
-    meshDescriptor["bonePositionX"] = readFloat(file_object)
-    meshDescriptor["bonePositionY"] = readFloat(file_object)
-    meshDescriptor["bonePositionZ"] = readFloat(file_object)
+    meshDescriptor["bonePosition"] = readVector3(file_object) * scalefactor
 
     return meshDescriptor
 
 def readLight(file_object):
     light = dict()
     light["flags"] = readUInt32(file_object)
-    light["name"] = readUBytes(file_object, 20).decode("cp858").rstrip('\x00')
+    light["name"] = readString(file_object)
     light["position"] = [readFloat(file_object), readFloat(file_object), readFloat(file_object)]
     light["angles"] = [readFloat(file_object), readFloat(file_object)]
     light["color"]= [readUByte(file_object)/255,readUByte(file_object)/255,readUByte(file_object)/255,readUByte(file_object)/255]
@@ -193,18 +201,10 @@ def loadRawVertices(file_object, header, meshDescriptors):
         for j in range(1, len(meshDescriptors)):
             if i >= meshDescriptors[j]["verticesOffset"]:
                 vertex["bone"]+=1
-        vertex["x"] = readFloat(file_object)
-        vertex["y"] = readFloat(file_object)
-        vertex["z"] = readFloat(file_object)
-        vertex["nx"] = readFloat(file_object)
-        vertex["ny"] = readFloat(file_object)
-        vertex["nz"] = readFloat(file_object)
+        vertex["position"] = readVector3(file_object) * scalefactor
+        vertex["normal"] = readVector3(file_object)
         vertex["t1"] = readUInt32(file_object)
-        B= readUByte(file_object)/255
-        G= readUByte(file_object)/255
-        R= readUByte(file_object)/255
-        A= readUByte(file_object)/255
-        vertex["color_ARGB"] = [R,G,B,A]# readUInt32(file_object)
+        vertex["color_ARGB"] = readColor32(file_object)
         rawVertices.append(vertex)
     return rawVertices
 
@@ -317,12 +317,12 @@ def DetermineSkin(modelData):
                     return
     modelData["isSkinned"] = False;
 
-def BuildVertices(meshDescriptors, rawVertices, meshcenter):
+def BuildVertices(meshDescriptors, rawVertices, meshCenter):
     vertices = []
     for meshDescriptor in meshDescriptors:
         for i in range(meshDescriptor["vertexCount"]):
             vertex = rawVertices[meshDescriptor["verticesOffset"]+i]
-            vertices.append([(vertex["x"]+(meshDescriptor["positionX"]-meshcenter[0])) * scalefactor, (vertex["z"]+(meshDescriptor["positionZ"]-meshcenter[2])) * scalefactor, -(vertex["y"]+(meshDescriptor["positionY"]-meshcenter[1])) * scalefactor])
+            vertices.append(vertex["position"] + meshDescriptor["position"] - Vector(meshCenter))
     return vertices
 
 def buildFaces(meshDescriptor, triangles, rectangles, parentDescriptor):
@@ -372,7 +372,7 @@ def buildUVs(meshDescriptor, triangles, rectangles, textures):
             UVs.extend([uv1, uv2, uv3, uv4])
     return UVs
 
-def buildVColors(vertices, faces):# triangles, rectangles):
+def buildVColors(vertices, faces):
     #for each face
     #color is color of referenced vertex
     colors =[]
@@ -384,13 +384,13 @@ def buildVColors(vertices, faces):# triangles, rectangles):
 
     return colors
 
-def buildNormals(vertices, faces):# triangles, rectangles):
+def buildNormals(vertices, faces):
     #same as colors
     normals =[]
     for face in faces:
         faceNormals = []
         for index in face:
-            faceNormals.append([vertices[index]["nx"], vertices[index]["nz"], -vertices[index]["ny"]])
+            faceNormals.append(vertices[index]["normal"])
         normals.extend(faceNormals)
 
     return normals
@@ -408,16 +408,16 @@ def buildMaterials(meshDescriptor, triangles, rectangles, shaders):
 
 ###
 def computeMeshCenter(meshDescriptors):
-    minX = maxX = meshDescriptors[0]["positionX"]
-    minY = maxY = meshDescriptors[0]["positionY"]
-    minZ = maxZ = meshDescriptors[0]["positionZ"]
+    minX = maxX = meshDescriptors[0]["position"].x
+    minY = maxY = meshDescriptors[0]["position"].y
+    minZ = maxZ = meshDescriptors[0]["position"].z
     for meshDescriptor in meshDescriptors:
-        minX = min(minX, meshDescriptor["positionX"])
-        maxX = max(maxX, meshDescriptor["positionX"])
-        minY = min(minY, meshDescriptor["positionY"])
-        maxY = max(maxY, meshDescriptor["positionY"])
-        minZ = min(minZ, meshDescriptor["positionZ"])
-        maxZ = max(maxZ, meshDescriptor["positionZ"])
+        minX = min(minX, meshDescriptor["position"].x)
+        maxX = max(maxX, meshDescriptor["position"].x)
+        minY = min(minY, meshDescriptor["position"].y)
+        maxY = max(maxY, meshDescriptor["position"].y)
+        minZ = min(minZ, meshDescriptor["position"].z)
+        maxZ = max(maxZ, meshDescriptor["position"].z)
     return ((minX+maxX)/2,(minY+maxY)/2,(minZ+maxZ)/2)
 
 def makeShaderFlags(meshFlags):
@@ -584,8 +584,10 @@ def ImportModels(file_object, objectName):
     for faceIndex, face in enumerate(mesh.polygons):
         face.material_index = materialIDs[faceIndex]
 
+    mesh.validate() #prevents crash on editing levels for now
+
     object = bpy.data.objects.new(objectName, mesh)
-    object.location = (meshCenter[0] * scalefactor, meshCenter[2] * scalefactor, -meshCenter[1] * scalefactor)
+    object.location = meshCenter
     scene = bpy.context.scene
     scene.collection.objects.link(object)
 
@@ -594,23 +596,23 @@ def ImportModels(file_object, objectName):
         if meshDescriptor["flags"] & environmentMapped !=0:
             probe = bpy.data.lightprobes.new(meshDescriptor["name"]+"_probe", 'CUBE')
             probe.clip_end = 200.0
-            probe.influence_distance = math.sqrt(meshDescriptor["boxExtentPosX"] ** 2 + meshDescriptor["boxExtentPosY"] ** 2 + meshDescriptor["boxExtentposZ"] ** 2) * scalefactor + probe.falloff
+            probe.influence_distance = meshDescriptor["boxExtentPos"].length + probe.falloff
             probeObject = bpy.data.objects.new(meshDescriptor["name"]+"_probe", probe)
             bpy.context.scene.collection.objects.link(probeObject)
             probeObject.parent = object
-            probeObject.location = (meshDescriptor["positionX"] * scalefactor -object.location[0], meshDescriptor["positionZ"] * scalefactor - object.location[1], -meshDescriptor["positionY"] * scalefactor - object.location[2])
+            probeObject.location = meshDescriptor["position"] -object.location
         if meshDescriptor["flags"] & mirror !=0:
             probe = bpy.data.lightprobes.new(meshDescriptor["name"]+"_probe", 'PLANAR')
             probe.clip_end = 200.0
             probeObject = bpy.data.objects.new(meshDescriptor["name"]+"_probe", probe)
             bpy.context.scene.collection.objects.link(probeObject)
             probeObject.parent = object
-            probeObject.location = (meshDescriptor["positionX"] * scalefactor -object.location[0], meshDescriptor["positionZ"] * scalefactor - object.location[1], -meshDescriptor["positionY"] * scalefactor - object.location[2])
+            probeObject.location = meshDescriptor["position"] -object.location
             #change size and orientation to match vertices
             direction = computeMirrorNormal(meshDescriptor, vertices, modelData["meshes"][i]["triangles"], modelData["meshes"][i]["rectangles"])
             rotation = direction.to_track_quat('Z', 'Y').to_euler() #assuming the mirror is pointing up originally
             probeObject.rotation_euler = rotation
-            scale = math.sqrt(meshDescriptor["boxExtentPosX"] ** 2 + meshDescriptor["boxExtentPosY"] ** 2 + meshDescriptor["boxExtentposZ"] ** 2) * scalefactor
+            scale = meshDescriptor["boxExtentPos"].length
             probeObject.scale = [scale, scale, 1]
 
     #skeleton
@@ -630,7 +632,7 @@ def ImportModels(file_object, objectName):
         #for each object, create a bone
         for i, meshDescriptor in enumerate (meshDescriptors):
             bone = edit_bones.new(meshDescriptor["name"])
-            bone.head = (meshDescriptor["positionX"] * scalefactor -object.location[0], meshDescriptor["positionZ"] * scalefactor - object.location[1], -meshDescriptor["positionY"] * scalefactor - object.location[2])
+            bone.head = meshDescriptor["position"] -object.location
             bone.tail = bone.head + Vector([0,0,0.1])
         #link bones into a hierarchy
         for i, meshDescriptor in enumerate (meshDescriptors):
@@ -679,11 +681,10 @@ def ReadPalette(file_object, colorCount):
         blue = readUByte(file_object)
         alpha = 0 if (red == 0 and green == 0 and blue == 0) else 1
         palette.append([red/255, green/255, blue/255, alpha])
-    #print(palette)
     return palette
 
 def Decompress(file_object, compressedSize, uncompressedSize):
-    startAddress = file_object.tell()# reader.BaseStream.Position;
+    startAddress = file_object.tell()
     if compressedSize == 65536:
         return readUBytes(file_object, compressedSize)
     result = []
@@ -691,7 +692,7 @@ def Decompress(file_object, compressedSize, uncompressedSize):
     currentByte = 1
     while currentByte < uncompressedSize:
         flags = readUByte(file_object)
-        for flagIndex in range(8): #= 0; flagIndex < 8; flagIndex++)
+        for flagIndex in range(8):
             CompressionFlag = (flags >> (7 - flagIndex) & 1) != 0
             if CompressionFlag == True:
                 sequenceDescription = readUByte(file_object)
@@ -699,29 +700,29 @@ def Decompress(file_object, compressedSize, uncompressedSize):
                 sequenceSize = (sequenceDescription >> 2) + 3
                 offset = 0
                 if sequenceType == 0:
-                   # //répétition du pixel précédent 
-                    #//(pixel précédent inclue dans la taille de la séquence) 
+                    # répétition du pixel précédent 
+                    # (pixel précédent inclus dans la taille de la séquence) 
                     offset = 1;
                     sequenceSize -= 1
 
                 elif sequenceType == 1:
-                    #//copie d'une séquence de pixels,
-                    #//(n) pixels avant le pixel précédent (prochain octet = valeur de n)
+                    # copie d'une séquence de pixels,
+                    # (n) pixels avant le pixel précédent (prochain octet = valeur de n)
                     offset = 1 + readUByte(file_object)
 
                 elif sequenceType == 2:
-                    #//copie d'une séquence de pixels,
-                    #//(n) pixels avant le pixel précédent (2 prochains octets = valeur de n)
+                    # copie d'une séquence de pixels,
+                    # (n) pixels avant le pixel précédent (2 prochains octets = valeur de n)
                     offset = 1 + (readUByte(file_object) << 8) + readUByte(file_object)
 
                 elif sequenceType == 3:
-                    #//copie d'une séquence de pixels, (n) pixels avant le pixel précédent
-                    #//(n = (256 * prochain octet) -1)
+                    # copie d'une séquence de pixels, (n) pixels avant le pixel précédent
+                    # (n = (256 * prochain octet) -1)
                     offset = 1 + readUByte(file_object) * 256 - 1
                 else:
                     raise Exception("invalid flag")
 
-                for i in range(sequenceSize):# = 0; i < sequenceSize; i++)
+                for i in range(sequenceSize):
                     if offset > currentByte:
                         result.append(0)
                     else:
@@ -735,14 +736,14 @@ def Decompress(file_object, compressedSize, uncompressedSize):
                 if (currentByte >= uncompressedSize):
                     return result
 
-            currentAddress = file_object.tell()#reader.BaseStream.Position;
+            currentAddress = file_object.tell()
             if currentAddress - startAddress >= compressedSize:
                 return result
     return result
 
 def ApplyPalette(palette, texture):
-    result = []#new Color[texture.Length]
-    for pixel in range(len(texture)):# = 0; pixel < texture.Length; pixel++)
+    result = []
+    for pixel in range(len(texture)):
         result.extend(palette[texture[pixel]])
     return result
 
