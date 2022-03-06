@@ -181,10 +181,16 @@ def readLight(file_object):
     light = dict()
     light["flags"] = readUInt32(file_object)
     light["name"] = readString(file_object)
-    light["position"] = [readFloat(file_object), readFloat(file_object), readFloat(file_object)]
+    light["float 1,2"] = [readFloat(file_object), readFloat(file_object)]
+    light["intensity"] = readFloat(file_object)
+    #light["position"] = readVector3(file_object) * scalefactor # [readFloat(file_object), readFloat(file_object), readFloat(file_object)]
     light["angles"] = [readFloat(file_object), readFloat(file_object)]
     light["color"]= [readUByte(file_object)/255,readUByte(file_object)/255,readUByte(file_object)/255,readUByte(file_object)/255]
-    light["unknown"] = readUBytes(file_object, 192+64)# [192 octets] Light Points (6 x (12 bytes for pos[x,y,z] + 20 unkown bytes))
+    for i in range(6):
+        light["position"+str(i)] = readVector3(file_object) * scalefactor
+        light["unknown"+str(i)] = readUBytes(file_object, 20)
+    light["unknown"] = readUBytes(file_object, 64)
+    #light["unknown"] = readUBytes(file_object, 192+64)# [192 octets] Light Points (6 x (12 bytes for pos[x,y,z] + 20 unkown bytes))
     return light
 
 def loadRawVertices(file_object, header, meshDescriptors):
@@ -473,6 +479,24 @@ def computeMirrorNormal(meshDescriptor, vertices, triangles, rectangles):
     v2 = Vector(vertices[vertex3]) - Vector(vertices[vertex1])
     normal = v1.cross(v2).normalized()
     return Vector(normal)
+
+def fixDuplicateFaces(faces, vertices):
+    print("face check:")
+    faceSet = set()
+    for i, face in enumerate(faces):
+        faceTuple = tuple(sorted(face))
+        if faceTuple in faceSet:
+            print ("duplicate face "+str(i))
+            baseIndex = len(vertices)
+            newface = list(range(baseIndex, baseIndex+len(faceTuple)))
+            faces[i] = newface
+            for index in face:
+                vertices.append(vertices[index].copy())
+        else:
+            faceSet.add(faceTuple)
+
+#def checkDegenFaces(faces):
+    
 ###
 
 RECTANGLE_SIZE = 32;
@@ -522,15 +546,15 @@ def ImportModels(file_object, objectName):
             meshes.append(LoadMeshPolygons(header, meshDescriptors[i], file_object))
     modelData["meshes"] = meshes
 
-    # lights = []
-    # print("light count: {0}".format(header["lightCount"]))
-    # print("lightsUnknown1 count: {0}".format(header["lightsUnknown1"]))
-    # print("lightsUnknown2 count: {0}".format(header["lightsUnknown2"]))
-    # if header["lightsUnknown2"] > 0:
-    #     file_object.seek(header["lightsOffset"])
-    #     for i in range(header["lightsUnknown2"]):
-    #         lights.append(readLight(file_object))
-    #         print(lights[i])
+    lights = []
+    print("light count: {0}".format(header["lightCount"]))
+    print("lightsUnknown1 count: {0}".format(header["lightsUnknown1"]))
+    print("lightsUnknown2 count: {0}".format(header["lightsUnknown2"]))
+    if header["lightsUnknown2"] > 0:
+        file_object.seek(header["lightsOffset"])
+        for i in range(header["lightsUnknown2"]):
+            lights.append(readLight(file_object))
+            print(lights[i])
 
     #process the loaded data
     DetermineSkin(modelData)
@@ -564,9 +588,11 @@ def ImportModels(file_object, objectName):
             UVs.extend(buildUVs(modelData["meshes"][i]["descriptor"], modelData["meshes"][i]["triangles"], modelData["meshes"][i]["rectangles"], materials))
             materialIDs.extend(buildMaterials(modelData["meshes"][i]["descriptor"], modelData["meshes"][i]["triangles"], modelData["meshes"][i]["rectangles"], shaders))
 
+    facesCopy = faces.copy()
+    fixDuplicateFaces(facesCopy, vertices)
     #build the blender mesh
     mesh = bpy.data.meshes.new(objectName)
-    mesh.from_pydata(vertices, [], faces)
+    mesh.from_pydata(vertices, [], facesCopy)
 
     new_uv = mesh.uv_layers.new(name = 'DefaultUV')
     for loop in mesh.loops:
@@ -574,17 +600,27 @@ def ImportModels(file_object, objectName):
 
     colors = buildVColors(rawVertices, faces)
     new_colors = mesh.vertex_colors.new(name = 'DefaultColors')
+
     for loop in mesh.loops:
         new_colors.data[loop.index].color = colors[loop.index]
 
     normals = buildNormals(rawVertices, faces)
+    loop_normals = [None] * len(mesh.loops)
+    for loop in mesh.loops:
+        loop_normals[loop.index] = normals[loop.index]
+    print("vcolors count: "+str(len(colors)))
+    print("normal count: "+str(len(normals)))
+    print("loops count: "+str(len(mesh.loops)))
     mesh.use_auto_smooth = True #needed for custom normals
-    mesh.normals_split_custom_set(normals)
+    mesh.normals_split_custom_set(loop_normals)
+    # mesh.calc_normals_split()
+    # for loop in mesh.loops:
+    #     loop.normal = normals[loop.index]
 
     for faceIndex, face in enumerate(mesh.polygons):
         face.material_index = materialIDs[faceIndex]
 
-    mesh.validate() #prevents crash on editing levels for now
+    mesh.validate(verbose=True) #prevents crash on editing levels for now
 
     object = bpy.data.objects.new(objectName, mesh)
     object.location = meshCenter
@@ -668,8 +704,14 @@ def ImportModels(file_object, objectName):
     #     lightObject.empty_display_size = 2
     #     lightObject.empty_display_type = 'PLAIN_AXES'
     #     lightObject.parent = object
-    #     lightObject.location = (lightDescriptor["position"][0] * scalefactor -object.location[0], lightDescriptor["position"][2] * scalefactor -object.location[1], -lightDescriptor["position"][1] * scalefactor -object.location[2])
-        
+    #     lightObject.location = lightDescriptor["position0"] - object.location
+    #     for i in range(1,6):
+    #         sublightObject = bpy.data.objects.new( lightDescriptor["name"]+"_"+str(i), None )
+    #         scene.collection.objects.link(sublightObject)
+    #         sublightObject.empty_display_size = 1
+    #         sublightObject.empty_display_type = 'PLAIN_AXES'
+    #         sublightObject.parent = lightObject
+    #         sublightObject.location = lightDescriptor["position"+str(i)] - lightObject.location - object.location 
 
     return mesh, materials, shaders;
 
